@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm 
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
+import pandas as pd
 
 
 from sklearn.datasets import load_breast_cancer, load_diabetes, fetch_california_housing, load_wine, fetch_covtype
@@ -135,12 +136,20 @@ class DeepTreeEnsemble(object):
         
         for i in range(len(model_list)):
             if i < len(model_list)-1 and self.models_are_equal(model_list[i], model_list[i+1]):
-                print("WARNING so models were initialized to the same weights. See model", i)
+                print("WARNING some models were initialized to the same weights. See model", i)
 
         iter = 0
+
+        # need lists to record highest metrics from anywhere in DTE
+        primary_metric = []
+        secondary_metric = []
+
         for each_model in model_list:
             iter+=1
-            self.training_loop(each_model, iter)
+            primary, secondary = self.training_loop(each_model, iter)
+            
+            primary_metric.append(primary)
+            secondary_metric.append(secondary)
 
         models_to_combine = []
         for i in range(self.base_number):
@@ -278,7 +287,10 @@ class DeepTreeEnsemble(object):
         avg_train_acc = []
         avg_test_acc = [] 
 
-        # for calculating f-1
+        # for storing and calculating f-1
+        train_f1 = []
+        test_f1 = []
+
         all_labels_test = []
         all_predictions_test = []
         all_labels_train = []
@@ -360,8 +372,12 @@ class DeepTreeEnsemble(object):
                 avg_train_losses.append(np.mean(train_losses))
                 avg_test_losses.append(np.mean(test_losses))
 
+                #create list of 'weighted avereage f1
+                train_f1.append(f1_score(all_labels_train, all_predictions_train, average="weighted"))
+                test_f1.append(f1_score(all_labels_train, all_predictions_train, average="weighted"))
+
                 # metrics per epoch
-                tqdm.write(f'Epoch [{epoch+1}/{self.epochs}], Train F1:{f1_score(all_labels_train, all_predictions_train, average="weighted")}, Train Loss: {np.mean(train_losses):.4f}, Train Acc: {np.mean(train_accuracies):.4f}, Test F1:{f1_score(all_labels_test, all_predictions_test, average="weighted")}, Test Loss: {np.mean(test_losses):.4f}, Test Acc: {np.mean(test_accuracies):.4f}')
+                # tqdm.write(f'Epoch [{epoch+1}/{self.epochs}], Train F1:{f1_score(all_labels_train, all_predictions_train, average="weighted")}, Train Loss: {np.mean(train_losses):.4f}, Train Acc: {np.mean(train_accuracies):.4f}, Test F1:{f1_score(all_labels_test, all_predictions_test, average="weighted")}, Test Loss: {np.mean(test_losses):.4f}, Test Acc: {np.mean(test_accuracies):.4f}')
 
         if self.task == 'regression':
             print(' in regress')
@@ -397,9 +413,9 @@ class DeepTreeEnsemble(object):
 
                         outputs = model(inputs)
 
-                        loss = self.criterion(outputs, labels.squeeze())
+                        loss = self.criterion(outputs, labels)
 
-                        rmse_value = rmse(labels.unsqueeze(1), outputs)
+                        rmse_value = rmse(labels, outputs)
                         test_rmse.append(rmse_value)
 
                         test_losses.append(loss.item())
@@ -420,35 +436,47 @@ class DeepTreeEnsemble(object):
             print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
             print(f'Highest Mean Train Accuracy (over epoch): {max(avg_train_acc)}')
             print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
-            print(f'Highest mean Test Accuracy (over epoch): {max(avg_test_acc)}')
 
-            # Plotting the loss
-            plt.figure(figsize=(15, 5))
-            plt.subplot(1, 2, 2)
-            plt.plot(range(1, self.epochs+1), avg_train_losses, label='Train Loss')
-            plt.subplot(1, 2, 2)
-            plt.plot(range(1, self.epochs+1), avg_test_losses, label='Test Loss')
-            plt.xlabel('Epoch')
-            plt.ylabel('Loss')
-            plt.title('Training and Test Loss Curve')
-            plt.legend()
+            max_test_acc = max(avg_test_acc)
+            max_index = avg_test_acc.index(max(avg_test_acc))
+            max_test_f1 = test_f1[max_index]
 
-            # Plotting the accuracy
-            plt.figure(figsize=(15, 5))
-            plt.subplot(1, 2, 2)
-            plt.plot(avg_train_acc, label='Train Accuracy')
-            plt.subplot(1,2,2)
-            plt.plot(avg_test_acc, label='Test Accuracy')
-            plt.xlabel('Epoch')
-            plt.ylabel('Accuracy')
-            plt.title('Training and Test Accuracy Curve')
-            plt.legend()
-            plt.grid()
+            print(f'Highest mean Test Accuracy (over epoch): {max_test_acc}')
+            print(f' Test F1 score at highest accuracy: {max_test_f1}')
 
 
-            plt.show()
-            print(f'{self.model_dir}model_{iter}.pth')
+            # # UNCOMENT FOR PLOTS 
+
+            # # Plotting the loss
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, self.epochs+1), avg_train_losses, label='Train Loss')
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, self.epochs+1), avg_test_losses, label='Test Loss')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Loss')
+            # plt.title('Training and Test Loss Curve')
+            # plt.legend()
+
+            # # Plotting the accuracy
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(avg_train_acc, label='Train Accuracy')
+            # plt.subplot(1,2,2)
+            # plt.plot(avg_test_acc, label='Test Accuracy')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Accuracy')
+            # plt.title('Training and Test Accuracy Curve')
+            # plt.legend()
+            # plt.grid()
+
+            # plt.show()
+
+
+            print(f'{self.model_dir}model_{iter}.pth \n')
             torch.save(model.state_dict(), f'{self.model_dir}model_{iter}.pth')
+
+            return (max_test_acc, max_test_f1)
 
 
         if self.task == 'regression':
@@ -457,6 +485,8 @@ class DeepTreeEnsemble(object):
             print(f'Lowest Mean Train RMSE (over epoch): {min(mean_train_rmse)}')
             print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
             print(f'Lowest mean Test RMSE (over epoch): {min(mean_test_rmse)}')
+
+            lowest_mse = min(mean_test_rmse)
            
             print(len(mean_train_rmse), len(mean_test_rmse), self.epochs+1)
             # Plotting the loss
