@@ -141,15 +141,31 @@ class DeepTreeEnsemble(object):
         iter = 0
 
         # need lists to record highest metrics from anywhere in DTE
-        primary_metric = []
-        secondary_metric = []
+        rmse_list = []
+        acc_list = []
+        f1_list = []
+        # losses too
+        min_train_list = []
+        min_test_list = []
 
-        for each_model in model_list:
-            iter+=1
-            primary, secondary = self.training_loop(each_model, iter)
-            
-            primary_metric.append(primary)
-            secondary_metric.append(secondary)
+        if self.task == 'regression':
+            for each_model in model_list:
+                iter+=1
+                primary = self.training_loop(each_model, iter)
+
+                rmse_list.append(primary)
+                min_test_list.append(min_test)
+                min_train_list.append(min_train)
+
+        if self.task == 'classification':
+            for each_model in model_list:
+                iter+=1
+                primary, secondary, min_test, min_train = self.training_loop(each_model, iter)
+
+                acc_list.append(primary)
+                f1_list.append(secondary)
+                min_test_list.append(min_test)
+                min_train_list.append(min_train)
 
         models_to_combine = []
         for i in range(self.base_number):
@@ -159,9 +175,41 @@ class DeepTreeEnsemble(object):
             models_to_combine.append(trained_model)
 
         id = self.base_number
-        final_model = self.combine_and_retrain(self.model_arch, models_to_combine, self.model_dir, self.epochs, self.criterion, id)
 
-        return final_model
+        if self.task == 'regression':
+            final_model, rmse, min_test, min_train = self.combine_and_retrain(self.model_arch, models_to_combine, self.model_dir, self.epochs, self.criterion, id, rmse_list, min_test_list, min_train_list)
+            rmse_list.append(rmse)
+            min_test_list.append(min_test)
+            min_train_list.append(min_train)
+
+            min_rmse = min(rmse_list)
+
+            print(f' Minimum RMSE Obtained over all training: {min_rmse}')
+            return final_model, min_rmse
+        
+        if self.task == 'classification':
+            final_model, acc, f1, min_test, min_train = self.combine_and_retrain(self.model_arch, models_to_combine, self.model_dir, self.epochs, self.criterion, id, acc_list, min_test_list, min_train_list, f1_list)
+            acc_list.append(acc)
+            f1_list.append(f1)
+            min_test_list.append(min_test)
+            min_train_list.append(min_train)
+
+            max_acc = max(acc_list)
+            max_index = acc_list.index(max(acc_list))
+            max_test_f1 = f1_list[max_index]
+
+            print(f' Maximum accuracy: {max_acc}, F1: {max_test_f1}, Test: {min(min_test_list)}, Train: {min(min_train_list)}')
+
+            metrics = {
+            'DTE_acc': [max_acc],
+            'DTE_f1': [max_test_f1],
+            'DTE_test': [min(min_test_list)],
+            'DTE_train': [min(min_train_list)]
+             }
+            
+            metrics_df = pd.DataFrame(metrics)
+            
+            return metrics_df
 
     def train_DTE_patience(self, model_arch: nn.Module, base_number:int, epochs: int, patience:int, model_dir, criterion):
         # ensure that base_number is even
@@ -212,30 +260,69 @@ class DeepTreeEnsemble(object):
         return True
 
     # Recursive function to combine models and retrain
-    def combine_and_retrain(self, model, models, model_dir, epochs, criterion, id):
+    def combine_and_retrain(self, model, models, model_dir, epochs, criterion, id, primary_metric, min_test_loss, min_train_loss, secondary_metric = []):
         # Base case: If there's only one model, return it
         if len(models) == 1:
-            return models[0]
+            if self.task=='regression':
+                rmse = float('inf')
+                min_test = float('inf')
+                min_train = float('inf')
+                return models[0], rmse, min_test, min_train
+            if self.task=='classification':
+                acc = 0 # temporary values for these metrics that are ultimately ignored
+                f1 = 0
+                min_test = float('inf')
+                min_train = float('inf')
+                return models[0], acc, f1, min_test, min_train
         
         # Calculate the midpoint to split the models into two groups
         midpoint = len(models) // 2
         
         # Recursively combine and retrain the left and right halves
-        id += 1
-        left_half = self.combine_and_retrain(model, models[:midpoint], model_dir, epochs, criterion, id)
+        # regression
+        if self.task=='regression':
+            id += 1
+            left_half, rmse, min_test, min_train = self.combine_and_retrain(model, models[:midpoint], model_dir, epochs, criterion, id, primary_metric, min_test_loss, min_train_loss, secondary_metric)
+            primary_metric.append(rmse)
+            min_test_loss.append(min_test)
+            min_train_loss.append(min_train)
 
-        id += 1
-        right_half = self.combine_and_retrain(model, models[midpoint:], model_dir, epochs, criterion, id)
-        
+            id += 1
+            right_half, rmse, min_test, min_train = self.combine_and_retrain(model, models[midpoint:], model_dir, epochs, criterion, id, primary_metric, min_test_loss, min_train_loss, secondary_metric)
+            primary_metric.append(rmse)
+            min_test_loss.append(min_test)
+            min_train_loss.append(min_train)
+
+        #classification
+        if self.task=='classification':
+            id += 1
+            left_half, acc, f1, min_test, min_train = self.combine_and_retrain(model, models[:midpoint], model_dir, epochs, criterion, id, primary_metric, min_test_loss, min_train_loss, secondary_metric)
+            primary_metric.append(acc)
+            secondary_metric.append(f1)
+            min_test_loss.append(min_test)
+            min_train_loss.append(min_train)
+
+            id += 1
+            right_half, acc, f1, min_test, min_train = self.combine_and_retrain(model, models[midpoint:], model_dir, epochs, criterion, id, primary_metric, min_test_loss, min_train_loss, secondary_metric)
+            primary_metric.append(acc)
+            secondary_metric.append(f1)
+            min_test_loss.append(min_test)
+            min_train_loss.append(min_train)
+
         # Create a new model and average the weights of the left and right halves
         combined_model = model
         for param_left, param_right, param_combined in zip(left_half.parameters(), right_half.parameters(), combined_model.parameters()):
             param_combined.data.copy_(0.5 * param_left.data + 0.5 * param_right.data)
         
         # Retrain the combined model
-        self.training_loop(combined_model, id)
+        if self.task=='regression':
+            rmse, min_test, min_train = self.training_loop(combined_model, id)
+            return combined_model, rmse, min_test, min_train 
+        if self.task=='classification':
+            acc, f1, min_test, min_train = self.training_loop(combined_model, id)
+            return combined_model, acc, f1, min_test, min_train
         
-        return combined_model
+        
 
     def initialize_model_with_random_weights(self, model):
         def weight_init(m):
@@ -428,7 +515,7 @@ class DeepTreeEnsemble(object):
                 avg_train_losses.append(np.mean(train_losses))
                 avg_test_losses.append(np.mean(test_losses))
 
-                tqdm.write(f'Epoch [{epoch+1}/{self.epochs}], Train Loss: {np.mean(train_losses):.4f}, Train RMSE:{np.mean(train_rmse)}, Test Loss: {np.mean(test_losses):.4f}, Test RMSE: {np.mean(test_rmse)}')
+                # tqdm.write(f'Epoch [{epoch+1}/{self.epochs}], Train Loss: {np.mean(train_losses):.4f}, Train RMSE:{np.mean(train_rmse)}, Test Loss: {np.mean(test_losses):.4f}, Test RMSE: {np.mean(test_rmse)}')
 
         
         if self.task == 'classification':
@@ -437,9 +524,12 @@ class DeepTreeEnsemble(object):
             print(f'Highest Mean Train Accuracy (over epoch): {max(avg_train_acc)}')
             print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
 
+            # Record metrics for testing
             max_test_acc = max(avg_test_acc)
             max_index = avg_test_acc.index(max(avg_test_acc))
             max_test_f1 = test_f1[max_index]
+            min_train_loss = min(avg_train_losses)
+            min_test_loss = min(avg_test_losses)
 
             print(f'Highest mean Test Accuracy (over epoch): {max_test_acc}')
             print(f' Test F1 score at highest accuracy: {max_test_f1}')
@@ -476,7 +566,7 @@ class DeepTreeEnsemble(object):
             print(f'{self.model_dir}model_{iter}.pth \n')
             torch.save(model.state_dict(), f'{self.model_dir}model_{iter}.pth')
 
-            return (max_test_acc, max_test_f1)
+            return max_test_acc, max_test_f1, min_test_loss, min_train_loss
 
 
         if self.task == 'regression':
@@ -487,38 +577,313 @@ class DeepTreeEnsemble(object):
             print(f'Lowest mean Test RMSE (over epoch): {min(mean_test_rmse)}')
 
             lowest_mse = min(mean_test_rmse)
+            min_train_loss = min(avg_train_losses)
+            min_test_loss = min(avg_test_losses)
            
-            print(len(mean_train_rmse), len(mean_test_rmse), self.epochs+1)
-            # Plotting the loss
-            plt.figure(figsize=(15, 5))
-            plt.subplot(1, 2, 2)
-            plt.plot(range(1, self.epochs+1), avg_train_losses, label='Train Loss')
-            plt.subplot(1, 2, 2)
-            plt.plot(range(1, self.epochs+1), avg_test_losses, label='Test Loss')
-            plt.xlabel('Epoch')
-            plt.ylabel('Loss')
-            plt.title('Training and Test Loss Curve')
-            plt.legend()
+            # # Uncomment for charts
+            # # Plotting the loss
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, self.epochs+1), avg_train_losses, label='Train Loss')
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, self.epochs+1), avg_test_losses, label='Test Loss')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Loss')
+            # plt.title('Training and Test Loss Curve')
+            # plt.legend()
 
-            # Plotting the accuracy
-            plt.figure(figsize=(15, 5))
-            plt.subplot(1, 2, 2)
-            plt.plot(mean_train_rmse, label='Train RMSE')
-            plt.subplot(1,2,2)
-            plt.plot(mean_test_rmse, label='Test RMSE')
-            plt.xlabel('Epoch')
-            plt.ylabel('Accuracy')
-            plt.title('Training and Test RMSE Curve')
-            plt.legend()
-            plt.grid()
+            # # Plotting the accuracy
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(mean_train_rmse, label='Train RMSE')
+            # plt.subplot(1,2,2)
+            # plt.plot(mean_test_rmse, label='Test RMSE')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Accuracy')
+            # plt.title('Training and Test RMSE Curve')
+            # plt.legend()
+            # plt.grid()
 
 
-            plt.show()
+            # plt.show()
+
             print(f'{self.model_dir}model_{iter}.pth')
             torch.save(model.state_dict(), f'{self.model_dir}model_{iter}.pth')
 
+            return lowest_mse, min_test_loss, min_train_loss
 
+
+    def single_model(self):
+         # create new model
+        modelCopy = copy.deepcopy(self.model_arch)
+        model = self.initialize_model_with_random_weights(modelCopy)
+        # Assume we are running on a CUDA machine
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = model.to(device)
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=self.learning_rate)
+
+        # Keep track of loss and accuracy for plotting
+        train_losses = []
+        test_losses = []
+        avg_train_losses = []
+        avg_test_losses = []
+
+        # accuracy metrics for plotting (classification)
+        train_accuracies = []
+        test_accuracies = []
+        avg_train_acc = []
+        avg_test_acc = [] 
+
+        # for storing and calculating f-1
+        train_f1 = []
+        test_f1 = []
+
+        all_labels_test = []
+        all_predictions_test = []
+        all_labels_train = []
+        all_predictions_train = []
+
+        # for rmse (regression)
+        train_rmse = []
+        test_rmse = []
+        mean_train_rmse = []
+        mean_test_rmse = []
+
+        single_epoch_range = number_of_models(self.base_number) * self.epochs
+
+        # classification Training loop
+        if self.task == 'classification':
+            print('in multi')
+            for epoch in tqdm(range(single_epoch_range), desc="Training Process"):
+                # Training Phase 
+                model.train()
+                for (inputs, labels) in self.train_dataloader:
+                    inputs = inputs.to(device)
+                    labels = labels.to(torch.long).squeeze().to(device)
+
+                    outputs = model(inputs)
+
+                    outputs = torch.softmax(outputs, dim=1)
+                    outputs = outputs.to(torch.float32).to(device)
+                    
+                    loss = self.criterion(outputs, labels)
+
+                    # Backward and optimizeytpe:  torch.float32Layer dtype:  torch.float32tensor dytpe:  torch.float32Layer dtype:  torch.float32tensor dytpe:  torch.int64
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    # Track the accuracy
+                    _, predicted = torch.max(outputs.data, 1)
+                    # print('predicted', predicted)
+                    total = labels.size(0)
+                    correct = (predicted == labels).sum().item()
+                    train_accuracies.append(correct / total)
+
+                    # track f1
+                    all_labels_train.extend(labels.cpu().numpy())
+                    all_predictions_train.extend(predicted.cpu().numpy())
+
+                    # Track the loss
+                    train_losses.append(loss.item())
+
+
+                # Testing phase
+                model.eval()
+                with torch.no_grad():
+                    for (inputs, labels) in self.test_dataloader:
+                        inputs = inputs.to(device)
+                        labels = labels.to(torch.long).squeeze().to(device)
+
+                        outputs = model(inputs)
+
+                        outputs = torch.softmax(outputs, dim=1)
+                        outputs = outputs.to(torch.float32).to(device)
+
+                        loss = self.criterion(outputs, labels)
+
+                        _, predicted = torch.max(outputs.data, 1)
+                        total = labels.size(0)
+                        correct = (predicted == labels).sum().item()
+                        test_accuracies.append(correct / total)
+
+                        all_labels_test.extend(labels.cpu().numpy())
+                        all_predictions_test.extend(predicted.cpu().numpy())
+
+                        test_losses.append(loss.item())
+                
+                # create a list of average train and test accuacies per epoch
+                avg_train_acc.append(np.mean(train_accuracies))
+                avg_test_acc.append(np.mean(test_accuracies))
+
+                #create list of average losses
+                avg_train_losses.append(np.mean(train_losses))
+                avg_test_losses.append(np.mean(test_losses))
+
+                #create list of 'weighted avereage f1
+                train_f1.append(f1_score(all_labels_train, all_predictions_train, average="weighted"))
+                test_f1.append(f1_score(all_labels_train, all_predictions_train, average="weighted"))
+
+                # metrics per epoch
+                # tqdm.write(f'Epoch [{epoch+1}/{self.epochs}], Train F1:{f1_score(all_labels_train, all_predictions_train, average="weighted")}, Train Loss: {np.mean(train_losses):.4f}, Train Acc: {np.mean(train_accuracies):.4f}, Test F1:{f1_score(all_labels_test, all_predictions_test, average="weighted")}, Test Loss: {np.mean(test_losses):.4f}, Test Acc: {np.mean(test_accuracies):.4f}')
+
+        if self.task == 'regression':
+            print(' in regress')
+            for epoch in tqdm(range(single_epoch_range), desc="Training Process"):
+                model.train()
+                for (inputs, labels) in self.train_dataloader:
+                    inputs = inputs.to(device)
+                    labels = labels.to(torch.float32).to(device)
+
+                    outputs = model(inputs)
+                    outputs.to(device)
+                    
+                    # print('outputs:', outputs.shape)
+                    # print('labels:', labels.shape)
+                    loss = self.criterion(outputs, labels)
+
+                    # Backward and optimizeytpe:  torch.float32Layer dtype:  torch.float32tensor dytpe:  torch.float32Layer dtype:  torch.float32tensor dytpe:  torch.int64
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    rmse_value = rmse(labels, outputs)
+                    train_rmse.append(rmse_value)
+
+                    train_losses.append(loss.item())
+
+                # Testing phase
+                model.eval()
+                with torch.no_grad():
+                    for (inputs, labels) in self.test_dataloader:
+                        inputs = inputs.to(device)
+                        labels = labels.to(torch.float32).to(device)
+
+                        outputs = model(inputs)
+
+                        loss = self.criterion(outputs, labels)
+
+                        rmse_value = rmse(labels, outputs)
+                        test_rmse.append(rmse_value)
+
+                        test_losses.append(loss.item())
+                        
+                # list of mean rmse values per epoch
+                mean_train_rmse.append(np.mean(train_rmse))
+                mean_test_rmse.append(np.mean(test_rmse))
+
+                #create list of average losses
+                avg_train_losses.append(np.mean(train_losses))
+                avg_test_losses.append(np.mean(test_losses))
+
+                # tqdm.write(f'Epoch [{epoch+1}/{single_epoch_range}], Train Loss: {np.mean(train_losses):.4f}, Train RMSE:{np.mean(train_rmse)}, Test Loss: {np.mean(test_losses):.4f}, Test RMSE: {np.mean(test_rmse)}')
+
+        
+        if self.task == 'classification':
+            print(f'Total Epochs: {single_epoch_range}')
+            print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
+            print(f'Highest Mean Train Accuracy (over epoch): {max(avg_train_acc)}')
+            print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
+
+            # Record metrics for testing
+            max_test_acc = max(avg_test_acc)
+            max_index = avg_test_acc.index(max(avg_test_acc))
+            max_test_f1 = test_f1[max_index]
+            min_train_loss = min(avg_train_losses)
+            min_test_loss = min(avg_test_losses)
+
+            print(f'Highest mean Test Accuracy (over epoch): {max_test_acc}')
+            print(f' Test F1 score at highest accuracy: {max_test_f1}')
+
+
+            # # UNCOMENT FOR PLOTS 
+
+            # # Plotting the loss
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, single_epoch_range+1), avg_train_losses, label='Train Loss')
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, single_epoch_range+1), avg_test_losses, label='Test Loss')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Loss')
+            # plt.title('Training and Test Loss Curve')
+            # plt.legend()
+
+            # # Plotting the accuracy
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(avg_train_acc, label='Train Accuracy')
+            # plt.subplot(1,2,2)
+            # plt.plot(avg_test_acc, label='Test Accuracy')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Accuracy')
+            # plt.title('Training and Test Accuracy Curve')
+            # plt.legend()
+            # plt.grid()
+
+            # plt.show()
+
+
+            metrics = {
+            'single_acc': [max_test_acc],
+            'single_f1': [max_test_f1],
+            'single_test': [min_test_loss],
+            'single_train': [min_train_loss]
+             }
             
+            metrics_df = pd.DataFrame(metrics)
+
+            return metrics_df
+
+
+        if self.task == 'regression':
+            print(f'Total Epochs: {single_epoch_range}')
+            print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
+            print(f'Lowest Mean Train RMSE (over epoch): {min(mean_train_rmse)}')
+            print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
+            print(f'Lowest mean Test RMSE (over epoch): {min(mean_test_rmse)}')
+
+            lowest_mse = min(mean_test_rmse)
+            min_train_loss = min(avg_train_losses)
+            min_test_loss = min(avg_test_losses)
+           
+            # # Uncomment for charts
+            # # Plotting the loss
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, single_epoch_range+1), avg_train_losses, label='Train Loss')
+            # plt.subplot(1, 2, 2)
+            # plt.plot(range(1, single_epoch_range+1), avg_test_losses, label='Test Loss')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Loss')
+            # plt.title('Training and Test Loss Curve')
+            # plt.legend()
+
+            # # Plotting the accuracy
+            # plt.figure(figsize=(15, 5))
+            # plt.subplot(1, 2, 2)
+            # plt.plot(mean_train_rmse, label='Train RMSE')
+            # plt.subplot(1,2,2)
+            # plt.plot(mean_test_rmse, label='Test RMSE')
+            # plt.xlabel('Epoch')
+            # plt.ylabel('Accuracy')
+            # plt.title('Training and Test RMSE Curve')
+            # plt.legend()
+            # plt.grid()
+
+
+            # plt.show()
+
+            metrics = {
+            'single_rmse': [lowest_mse],
+            'single_test': [min_test_loss],
+            'single_train': [min_train_loss]
+             }
+            
+            metrics_df = pd.DataFrame(metrics)
+
+            return metrics_df
 
     def train_single_model(self):
         # create new model
@@ -635,31 +1000,41 @@ class DeepTreeEnsemble(object):
         avg_train_accuracies = [np.mean(train_accuracies[i:i+len(self.train_dataloader)]) for i in range(0, len(train_accuracies), len(self.train_dataloader))]
         avg_test_accuracies = [np.mean(test_accuracies[i:i+len(self.test_dataloader)]) for i in range(0, len(test_accuracies), len(self.test_dataloader))]
 
+        # Uncomment for plots
         # Plotting the loss
-        plt.figure(figsize=(15, 5))
-        plt.subplot(1, 2, 2)
-        plt.plot(range(1, single_epoch_range+1), avg_train_losses, label='Train Loss')
-        plt.subplot(1, 2, 2)
-        plt.plot(range(1, single_epoch_range+1), avg_test_losses, label='Test Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Training and Test Loss Curve')
-        plt.legend()
+        # plt.figure(figsize=(15, 5))
+        # plt.subplot(1, 2, 2)
+        # plt.plot(range(1, single_epoch_range+1), avg_train_losses, label='Train Loss')
+        # plt.subplot(1, 2, 2)
+        # plt.plot(range(1, single_epoch_range+1), avg_test_losses, label='Test Loss')
+        # plt.xlabel('Epoch')
+        # plt.ylabel('Loss')
+        # plt.title('Training and Test Loss Curve')
+        # plt.legend()
 
-        # Plotting the accuracy
-        plt.figure(figsize=(15, 5))
-        plt.subplot(1, 2, 2)
-        plt.plot(avg_train_accuracies, label='Train Accuracy')
-        plt.subplot(1,2,2)
-        plt.plot(avg_test_accuracies, label='Test Accuracy')
-        plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
-        plt.title('Training and Test Accuracy Curve')
-        plt.legend()
-        plt.grid()
+        # # Plotting the accuracy
+        # plt.figure(figsize=(15, 5))
+        # plt.subplot(1, 2, 2)
+        # plt.plot(avg_train_accuracies, label='Train Accuracy')
+        # plt.subplot(1,2,2)
+        # plt.plot(avg_test_accuracies, label='Test Accuracy')
+        # plt.xlabel('Epoch')
+        # plt.ylabel('Accuracy')
+        # plt.title('Training and Test Accuracy Curve')
+        # plt.legend()
+        # plt.grid()
+        # plt.show()
 
-
-        plt.show()
+        metrics = {
+            'single_acc': [max_acc],
+            'single_f1': [max_test_f1],
+            'single_test': [min(avg_test_accuracies)],
+            'single_train': [min(avg_train_accuracies)]
+             }
+            
+        metrics_df = pd.DataFrame(metrics)
+            
+        return metrics_df
         
 
     def training_loop_with_early_stopping(self, model, model_dir, patience, criterion, iter):
