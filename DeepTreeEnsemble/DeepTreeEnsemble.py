@@ -91,6 +91,7 @@ def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size
 
     # Calculate output size
     unique_targets = torch.unique(y_train_tensor[:, 0]).numel()
+    
     if unique_targets > 30:  # Assume regression if there are more than 30 unique values, classification otherwise
         output_size = 1  # regression
     else:
@@ -121,6 +122,8 @@ class DeepTreeEnsemble(object):
 
     def train_DTE(self):
         # ensure that base_number is even
+        print('|| TRAINING WEIGHT AVERAGING TREE ENSEMBLE ||')
+        print(f'Task: {self.task}')
         assert(self.base_number%2 == 0)
 
         # set up the base number of models 
@@ -151,7 +154,7 @@ class DeepTreeEnsemble(object):
         if self.task == 'regression':
             for each_model in model_list:
                 iter+=1
-                primary = self.training_loop(each_model, iter)
+                primary, min_test, min_train = self.training_loop(each_model, iter)
 
                 rmse_list.append(primary)
                 min_test_list.append(min_test)
@@ -185,7 +188,16 @@ class DeepTreeEnsemble(object):
             min_rmse = min(rmse_list)
 
             print(f' Minimum RMSE Obtained over all training: {min_rmse}')
-            return final_model, min_rmse
+
+            metrics = {
+            'DTE_rmse': [min_rmse],
+            'DTE_test': [min(min_test_list)],
+            'DTE_train': [min(min_train_list)]
+             }
+            
+            metrics_df = pd.DataFrame(metrics)
+
+            return metrics_df
         
         if self.task == 'classification':
             final_model, acc, f1, min_test, min_train = self.combine_and_retrain(self.model_arch, models_to_combine, self.model_dir, self.epochs, self.criterion, id, acc_list, min_test_list, min_train_list, f1_list)
@@ -198,7 +210,7 @@ class DeepTreeEnsemble(object):
             max_index = acc_list.index(max(acc_list))
             max_test_f1 = f1_list[max_index]
 
-            print(f' Maximum accuracy: {max_acc}, F1: {max_test_f1}, Test: {min(min_test_list)}, Train: {min(min_train_list)}')
+            print(f' Maximum accuracy: {max_acc}, F1: {max_test_f1}, Test: {min(min_test_list)}, Train: {min(min_train_list)} \n \n')
 
             metrics = {
             'DTE_acc': [max_acc],
@@ -354,7 +366,7 @@ class DeepTreeEnsemble(object):
         return model
 
     def training_loop(self, model, iter):
-        print(f'Training Model with id {iter}')
+        print(f'Model {iter}:')
         # Assume we are running on a CUDA machine
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model = model.to(device)
@@ -392,7 +404,7 @@ class DeepTreeEnsemble(object):
 
         # multi class Training loop
         if self.task == 'classification':
-            print('in multi')
+            # print('in multi')
             for epoch in tqdm(range(self.epochs), desc="Training Process"):
                 # Training Phase 
                 model.train()
@@ -467,7 +479,7 @@ class DeepTreeEnsemble(object):
                 # tqdm.write(f'Epoch [{epoch+1}/{self.epochs}], Train F1:{f1_score(all_labels_train, all_predictions_train, average="weighted")}, Train Loss: {np.mean(train_losses):.4f}, Train Acc: {np.mean(train_accuracies):.4f}, Test F1:{f1_score(all_labels_test, all_predictions_test, average="weighted")}, Test Loss: {np.mean(test_losses):.4f}, Test Acc: {np.mean(test_accuracies):.4f}')
 
         if self.task == 'regression':
-            print(' in regress')
+            # print(' in regress')
             for epoch in tqdm(range(self.epochs), desc="Training Process"):
                 model.train()
                 for (inputs, labels) in self.train_dataloader:
@@ -477,7 +489,6 @@ class DeepTreeEnsemble(object):
                     outputs = model(inputs)
                     outputs.to(device)
                     
-                    # print('outputs:', outputs.shape)
                     # print('labels:', labels.shape)
                     loss = self.criterion(outputs, labels)
 
@@ -519,10 +530,10 @@ class DeepTreeEnsemble(object):
 
         
         if self.task == 'classification':
-            print(f'Total Epochs: {self.epochs}')
-            print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
-            print(f'Highest Mean Train Accuracy (over epoch): {max(avg_train_acc)}')
-            print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
+            # print(f'Total Epochs: {self.epochs}')
+            # print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
+            # print(f'Highest Mean Train Accuracy (over epoch): {max(avg_train_acc)}')
+            # print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
 
             # Record metrics for testing
             max_test_acc = max(avg_test_acc)
@@ -531,8 +542,8 @@ class DeepTreeEnsemble(object):
             min_train_loss = min(avg_train_losses)
             min_test_loss = min(avg_test_losses)
 
-            print(f'Highest mean Test Accuracy (over epoch): {max_test_acc}')
-            print(f' Test F1 score at highest accuracy: {max_test_f1}')
+            # print(f'Highest mean Test Accuracy (over epoch): {max_test_acc}')
+            # print(f' Test F1 score at highest accuracy: {max_test_f1}')
 
 
             # # UNCOMENT FOR PLOTS 
@@ -563,18 +574,18 @@ class DeepTreeEnsemble(object):
             # plt.show()
 
 
-            print(f'{self.model_dir}model_{iter}.pth \n')
+            print(f'{self.model_dir}model_{iter}.pth')
             torch.save(model.state_dict(), f'{self.model_dir}model_{iter}.pth')
 
             return max_test_acc, max_test_f1, min_test_loss, min_train_loss
 
 
         if self.task == 'regression':
-            print(f'Total Epochs: {self.epochs}')
-            print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
-            print(f'Lowest Mean Train RMSE (over epoch): {min(mean_train_rmse)}')
-            print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
-            print(f'Lowest mean Test RMSE (over epoch): {min(mean_test_rmse)}')
+            # print(f'Total Epochs: {self.epochs}')
+            # print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
+            # print(f'Lowest Mean Train RMSE (over epoch): {min(mean_train_rmse)}')
+            # print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
+            # print(f'Lowest mean Test RMSE (over epoch): {min(mean_test_rmse)}')
 
             lowest_mse = min(mean_test_rmse)
             min_train_loss = min(avg_train_losses)
@@ -615,6 +626,7 @@ class DeepTreeEnsemble(object):
 
     def single_model(self):
          # create new model
+        print('|| TRAINING SINGLE MODEL || ')
         modelCopy = copy.deepcopy(self.model_arch)
         model = self.initialize_model_with_random_weights(modelCopy)
         # Assume we are running on a CUDA machine
@@ -654,7 +666,7 @@ class DeepTreeEnsemble(object):
 
         # classification Training loop
         if self.task == 'classification':
-            print('in multi')
+            print('Task: Classification')
             for epoch in tqdm(range(single_epoch_range), desc="Training Process"):
                 # Training Phase 
                 model.train()
@@ -729,7 +741,7 @@ class DeepTreeEnsemble(object):
                 # tqdm.write(f'Epoch [{epoch+1}/{self.epochs}], Train F1:{f1_score(all_labels_train, all_predictions_train, average="weighted")}, Train Loss: {np.mean(train_losses):.4f}, Train Acc: {np.mean(train_accuracies):.4f}, Test F1:{f1_score(all_labels_test, all_predictions_test, average="weighted")}, Test Loss: {np.mean(test_losses):.4f}, Test Acc: {np.mean(test_accuracies):.4f}')
 
         if self.task == 'regression':
-            print(' in regress')
+            print('Task: Regression')
             for epoch in tqdm(range(single_epoch_range), desc="Training Process"):
                 model.train()
                 for (inputs, labels) in self.train_dataloader:
@@ -781,10 +793,10 @@ class DeepTreeEnsemble(object):
 
         
         if self.task == 'classification':
-            print(f'Total Epochs: {single_epoch_range}')
-            print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
-            print(f'Highest Mean Train Accuracy (over epoch): {max(avg_train_acc)}')
-            print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
+            # print(f'Total Epochs: {single_epoch_range}')
+            # print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
+            # print(f'Highest Mean Train Accuracy (over epoch): {max(avg_train_acc)}')
+            # print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
 
             # Record metrics for testing
             max_test_acc = max(avg_test_acc)
@@ -793,8 +805,10 @@ class DeepTreeEnsemble(object):
             min_train_loss = min(avg_train_losses)
             min_test_loss = min(avg_test_losses)
 
-            print(f'Highest mean Test Accuracy (over epoch): {max_test_acc}')
-            print(f' Test F1 score at highest accuracy: {max_test_f1}')
+            # print(f'Highest mean Test Accuracy (over epoch): {max_test_acc}')
+            # print(f' Test F1 score at highest accuracy: {max_test_f1}')
+
+            print(f' Maximum accuracy: {max_test_acc}, F1: {max_test_f1}, Test: {min_test_loss}, Train: {min_train_loss} \n \n')
 
 
             # # UNCOMENT FOR PLOTS 
