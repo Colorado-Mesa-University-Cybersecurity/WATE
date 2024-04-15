@@ -15,6 +15,7 @@ import pandas as pd
 
 from sklearn.datasets import load_breast_cancer, load_diabetes, fetch_california_housing, load_wine, fetch_covtype
 
+
 def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size=32):
     dataset_load_functions = {
         'breast_cancer': load_breast_cancer,
@@ -71,8 +72,8 @@ def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size
     
     if task == 'classification':
         X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32)
-        X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.int64)
-        y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
+        X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32)
+        y_train_tensor = torch.tensor(y_train, dtype=torch.int64)
         y_test_tensor = torch.tensor(y_test, dtype=torch.int64)
     
     if len(y_train_tensor.shape) == 1:
@@ -408,6 +409,7 @@ class DeepTreeEnsemble(object):
             for epoch in tqdm(range(self.epochs), desc="Training Process"):
                 # Training Phase 
                 model.train()
+                # print('train')
                 for (inputs, labels) in self.train_dataloader:
                     inputs = inputs.to(device)
                     labels = labels.to(torch.long).squeeze().to(device)
@@ -441,6 +443,7 @@ class DeepTreeEnsemble(object):
 
                 # Testing phase
                 model.eval()
+                # print('test')
                 with torch.no_grad():
                     for (inputs, labels) in self.test_dataloader:
                         inputs = inputs.to(device)
