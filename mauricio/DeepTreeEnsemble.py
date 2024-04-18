@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 from torchvision import datasets
+from torchvision import transforms
 import random
 import copy
 from sklearn.model_selection import train_test_split
@@ -104,6 +105,19 @@ def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size
 
     return train_dataloader, test_dataloader, input_size, output_size
 
+class DatasetClass_test(Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        image_tensor, label = self.dataset[idx]
+
+        img_tensor_flat = torch.flatten(image_tensor)
+
+        return img_tensor_flat, label
 
 def create_imageloaders_for_dataset(imageset_name, test_size = 0.1, batch = 32):
     """loads in image datasets into batches for processing
@@ -115,17 +129,18 @@ def create_imageloaders_for_dataset(imageset_name, test_size = 0.1, batch = 32):
     # figure out a way to only download the data once the specific name has been called
     # instead of always having the data downloaded. More helpful in long term
 
-    mnist_dataset = datasets.MNIST(root='data', train=True, transform=ToTensor, download=True)
-    fashion_mnist_dataset = datasets.FashionMNIST(root='data', train=True, transform=ToTensor, download=True)
-    caltech101_dataset = datasets.Caltech101(root='data',transform=ToTensor,download=True)
+    mnist_dataset = datasets.MNIST(root='data', train=True, transform=transforms.ToTensor(), download=True)
+    fashion_mnist_dataset = datasets.FashionMNIST(root='data', train=True, transform=transforms.ToTensor(), download=True)
+    caltech101_dataset = datasets.Caltech101(root='data',transform=transforms.ToTensor(),download=True)
     
-    imageset_load_functions = {
+    
+    imageset_load_functions = { 
     'MNIST': mnist_dataset,
     'Fashion_MNIST': fashion_mnist_dataset,
     'CalTech101': caltech101_dataset
     }
 
-    imageset = imageset_load_functions[imageset_name]()
+    imageset = imageset_load_functions[imageset_name]
 
     train_size = 1-test_size
     dataset_size = len(imageset)
@@ -135,30 +150,26 @@ def create_imageloaders_for_dataset(imageset_name, test_size = 0.1, batch = 32):
 
     train_dataset, test_dataset = random_split(imageset, [train_dataset_size, test_dataset_size])
 
-    first_sample = imageset[0]
-    input_size = first_sample[0].size() 
-    output_size = len(set(sample[1] for sample in imageset))
+    train_dataset = DatasetClass_test(train_dataset)
+    test_dataset = DatasetClass_test(test_dataset)
+
+    img, _ = train_dataset[0]
+
+    # problems with input and outputs size
+    input_size = len(img)
+    output_size = 10
+    # len(set(sample[1] for sample in imageset))
 
     #properly structuring into Pytorch dataset for Dataloader conversion
-    trainset = DatasetClass(train_dataset)
-    testset = DatasetClass(test_dataset)
+    # trainset = DatasetClass(train_dataset)
+    # testset = DatasetClass(test_dataset)
 
-    train_loader = DataLoader(trainset, batch_size = batch, shuffle = True)
-    test_loader = DataLoader(testset, batch_size = batch, shuffle = False)
+    train_loader = DataLoader(train_dataset, batch_size = batch, shuffle = True)
+    test_loader = DataLoader(test_dataset, batch_size = batch, shuffle = False)
 
     return train_loader, test_loader, input_size, output_size
 
-class DatasetClass(Dataset):
-    def init(self, dataset):
-        self.dataset = dataset
 
-    def len(self):
-        return len(self.dataset)
-
-    def getitem(self, idx):
-        image_tensor, label = self.dataset[idx]
-
-        return image_tensor, label
 
 class DeepTreeEnsemble(object):
     def __init__(self, task_name, model_arch: nn.Module, base_number:int, epochs: int, model_dir:str, train_dataloader, test_dataloader, learning_rate):
