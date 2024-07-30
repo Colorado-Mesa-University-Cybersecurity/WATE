@@ -11,10 +11,25 @@ from tqdm import tqdm
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
 import pandas as pd
+import torchvision.datasets as datasets
+from torch.utils.data import DataLoader, random_split, Dataset
 
 
 from sklearn.datasets import load_breast_cancer, load_diabetes, fetch_california_housing, load_wine, fetch_covtype
 
+class DatasetClass_test(Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        image_tensor, label = self.dataset[idx]
+
+        img_tensor_flat = torch.flatten(image_tensor)
+
+        return img_tensor_flat, label
 
 def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size=32):
     dataset_load_functions = {
@@ -51,7 +66,7 @@ def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size
     scaler = StandardScaler()
     
     # Split data first to avoid data leakage
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
 
     print('xtrain size', len(X_train))
     print('xtest size', len(X_test))
@@ -84,7 +99,7 @@ def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
     test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Calculate input size (number of features)
@@ -100,11 +115,55 @@ def create_dataloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size
 
     return train_dataloader, test_dataloader, input_size, output_size
 
-def create_imageloaders_for_dataset(dataset_name, task, test_size=0.2, batch_size = 32):
-    """Create image_loaders for image datasets for further training
-    Examples of datasets we can use:
-        MNIST, Fashion-MNIST, Caltech-101, Stanford Cars Dataset, 
-    """
+def create_imageloaders_for_dataset(imageset_name, test_size = 0.1, batch = 32):
+    """loads in image datasets into batches for processing
+    Will be processing datasets such as: MNIST, Fashion-MNIST, 
+    Caltech-101"""
+
+    #TO-DO Wrap into dataloaders inorder 
+
+    # figure out a way to only download the data once the specific name has been called
+    # instead of always having the data downloaded. More helpful in long term
+
+    mnist_dataset = datasets.MNIST(root='data', train=True, transform=transforms.ToTensor(), download=True)
+    fashion_mnist_dataset = datasets.FashionMNIST(root='data', train=True, transform=transforms.ToTensor(), download=True)
+    caltech101_dataset = datasets.Caltech101(root='data',transform=transforms.ToTensor(),download=True)
+    
+    
+    imageset_load_functions = { 
+    'MNIST': mnist_dataset,
+    'Fashion_MNIST': fashion_mnist_dataset,
+    'CalTech101': caltech101_dataset
+    }
+
+    imageset = imageset_load_functions[imageset_name]
+
+    train_size = 1-test_size
+    dataset_size = len(imageset)
+
+    train_dataset_size = int(train_size * dataset_size)
+    test_dataset_size = dataset_size - train_dataset_size
+
+    train_dataset, test_dataset = random_split(imageset, [train_dataset_size, test_dataset_size])
+
+    train_dataset = DatasetClass_test(train_dataset)
+    test_dataset = DatasetClass_test(test_dataset)
+
+    img, _ = train_dataset[0]
+
+    # problems with input and outputs size
+    input_size = len(img)
+    output_size = 10
+    # len(set(sample[1] for sample in imageset))
+
+    #properly structuring into Pytorch dataset for Dataloader conversion
+    # trainset = DatasetClass(train_dataset)
+    # testset = DatasetClass(test_dataset)
+
+    train_loader = DataLoader(train_dataset, batch_size = batch, shuffle = True)
+    test_loader = DataLoader(test_dataset, batch_size = batch, shuffle = False)
+
+    return train_loader, test_loader, input_size, output_size
     
 
 class DeepTreeEnsemble(object):
@@ -146,8 +205,10 @@ class DeepTreeEnsemble(object):
         # print_model_parameters(model_list[1])
         
         for i in range(len(model_list)):
-            if i < len(model_list)-1 and self.models_are_equal(model_list[i], model_list[i+1]):
-                print("WARNING some models were initialized to the same weights. See model", i)
+            for j in range(i + 1, len(model_list)):
+                if self.models_are_equal(model_list[i], model_list[j]):
+                    print(f"WARNING: Models {i} and {j} were initialized to the same weights.")
+
 
         iter = 0
 
@@ -180,9 +241,8 @@ class DeepTreeEnsemble(object):
 
         models_to_combine = []
         for i in range(self.base_number):
-            i+=1
-            trained_model = self.model_arch
-            trained_model.load_state_dict(torch.load(f'{self.model_dir}model_{i}.pth'))
+            trained_model = copy.deepcopy(self.model_arch)
+            trained_model.load_state_dict(torch.load(f'{self.model_dir}model_{(i+1)}.pth'))
             models_to_combine.append(trained_model)
 
         id = self.base_number
@@ -293,10 +353,29 @@ class DeepTreeEnsemble(object):
             min_test_loss.append(min_test)
             min_train_loss.append(min_train)
 
+
         # Create a new model and average the weights of the left and right halves
-        combined_model = model
+        model = copy.deepcopy(self.model_arch)
+        # model = self.model_arch
+        combined_model = self.initialize_model_with_random_weights(model)
+
+        # UNCOMMENT TO VERIFY THE TWO MODELS ARE BEING AVERAGED CORRECTLY 
+        # print("Parameters before combining:")
+        # for i, (param_left, param_right, param_combined) in enumerate(zip(left_half.parameters(), right_half.parameters(), combined_model.parameters())):
+        #     if i == 2:  # Print only the first three parameters
+        #         print(f"Model to fill parameter {i}: {param_combined.data[0]}")
+        #         print(f"Left model parameter {i}: {param_left.data[0]}")
+        #         print(f"Right model parameter {i}: {param_right.data[0]}")
+        
         for param_left, param_right, param_combined in zip(left_half.parameters(), right_half.parameters(), combined_model.parameters()):
             param_combined.data.copy_(0.5 * param_left.data + 0.5 * param_right.data)
+
+        # print("Parameters after combining:")
+        # for i, (param_left, param_right, param_combined) in enumerate(zip(left_half.parameters(), right_half.parameters(), combined_model.parameters())):
+        #     if i == 2:
+        #         print(f"Model to fill parameter {i}: {param_combined.data[0]}")
+        #         print(f"Left model parameter {i}: {param_left.data[0]}")
+        #         print(f"Right model parameter {i}: {param_right.data[0]}")
         
         # Retrain the combined model
         if self.task=='regression':
@@ -310,11 +389,11 @@ class DeepTreeEnsemble(object):
 
     def initialize_model_with_random_weights(self, model):
         def weight_init(m):
-            random_seed = random.randint(1, 10000)  # Consider if you truly need this inside the loop
+            random_seed = random.randint(1, 10000) 
             torch.manual_seed(random_seed)
             
             if isinstance(m, nn.Linear):
-                init.xavier_normal_(m.weight)
+                init.kaiming_uniform_(m.weight)
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):  # Example for convolutional layers, if applicable
@@ -387,7 +466,7 @@ class DeepTreeEnsemble(object):
 
                     outputs = model(inputs)
 
-                    outputs = torch.softmax(outputs, dim=1)
+                    # outputs = torch.softmax(outputs, dim=1)
                     outputs = outputs.to(torch.float32).to(device)
                     
                     loss = self.criterion(outputs, labels)
@@ -422,7 +501,7 @@ class DeepTreeEnsemble(object):
 
                         outputs = model(inputs)
 
-                        outputs = torch.softmax(outputs, dim=1)
+                        # outputs = torch.softmax(outputs, dim=1)
                         outputs = outputs.to(torch.float32).to(device)
 
                         loss = self.criterion(outputs, labels)
@@ -650,7 +729,7 @@ class DeepTreeEnsemble(object):
 
                     outputs = model(inputs)
 
-                    outputs = torch.softmax(outputs, dim=1)
+                    # outputs = torch.softmax(outputs, dim=1)
                     outputs = outputs.to(torch.float32).to(device)
                     
                     loss = self.criterion(outputs, labels)
@@ -684,7 +763,7 @@ class DeepTreeEnsemble(object):
 
                         outputs = model(inputs)
 
-                        outputs = torch.softmax(outputs, dim=1)
+                        # outputs = torch.softmax(outputs, dim=1)
                         outputs = outputs.to(torch.float32).to(device)
 
                         loss = self.criterion(outputs, labels)
@@ -826,11 +905,11 @@ class DeepTreeEnsemble(object):
 
 
         if self.task == 'regression':
-            print(f'Total Epochs: {single_epoch_range}')
-            print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
-            print(f'Lowest Mean Train RMSE (over epoch): {min(mean_train_rmse)}')
-            print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
-            print(f'Lowest mean Test RMSE (over epoch): {min(mean_test_rmse)}')
+            # print(f'Total Epochs: {single_epoch_range}')
+            # print(f'Train loss start: {train_losses[0]}, Train loss end: {train_losses[-1]}')
+            # print(f'Lowest Mean Train RMSE (over epoch): {min(mean_train_rmse)}')
+            # print(f'Test loss start: {test_losses[0]}, Test loss end: {test_losses[-1]}')
+            # print(f'Lowest mean Test RMSE (over epoch): {min(mean_test_rmse)}')
 
             lowest_mse = min(mean_test_rmse)
             min_train_loss = min(avg_train_losses)
@@ -918,7 +997,7 @@ class DeepTreeEnsemble(object):
                 # print('outputs: ', outputs.shape)
                 if self.task == 'classification':
                     labels = labels.to(torch.long)
-                    outputs = torch.softmax(outputs, dim=1)
+                    # outputs = torch.softmax(outputs, dim=1)
                     outputs = outputs.to(torch.float32)
 
                 loss = self.criterion(outputs, labels.squeeze())
@@ -953,7 +1032,7 @@ class DeepTreeEnsemble(object):
 
                     if self.task == 'classification':
                         labels = labels.to(torch.long)
-                        outputs = torch.softmax(outputs, dim=1)
+                        # outputs = torch.softmax(outputs, dim=1)
                         outputs = outputs.to(torch.float32)
 
                     loss = self.criterion(outputs, labels.squeeze())
@@ -1014,7 +1093,7 @@ class DeepTreeEnsemble(object):
         # plt.show()
 
         metrics = {
-            'single_acc': [max_acc],
+            'single_acc': [max(mean_test_acc)],
             'single_f1': [max_test_f1],
             'single_test': [min(avg_test_accuracies)],
             'single_train': [min(avg_train_accuracies)]
